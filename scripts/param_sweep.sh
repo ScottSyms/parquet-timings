@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GEN="$ROOT/target/release/ais-parquet-optimizer"
-BENCH="$ROOT/target/release/ais-parquet-benchmark"
+BENCH="$ROOT/target/release/benchmark"
 TIMINGS="$ROOT/timings"
 MAX_ROWS=93000000
 CSV_DIR="$ROOT/csv"
