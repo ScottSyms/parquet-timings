@@ -178,11 +178,10 @@ def main():
                         # Only point-lookup queries matter for bloom
                         point_qs = {q: s for q, s in speedups.items()
                                     if any(kw in q for kw in ["MMSI", "IMO", "bloom", "lookup"])}
-                        point_qs = speedups
                         gm = geo_mean(list(point_qs.values())) if point_qs else 0
                         heatmap[(ri, ci)] = gm
 
-            header = "| FPP \\ NDV | " + " | ".join(ndv_labels) + " |"
+            header = "| FPP \\ NDV (point-lookup geo-mean) | " + " | ".join(ndv_labels) + " |"
             lines.append(header)
             lines.append("|" + "---|" * (len(ndv_labels) + 1))
 
