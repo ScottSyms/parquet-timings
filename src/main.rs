@@ -279,7 +279,7 @@ async fn main() -> Result<()> {
             .ok_or_else(|| anyhow!("failed to get total row count"))?;
         let keys = read_partition_keys(&ctx).await?;
         let avg = (total as usize) / keys.len().max(1);
-        let capped = args.row_group_size.min(avg);
+        let capped = args.row_group_size.min(avg / 5).max(1);
         status(format!(
             "smart-rgs: total_rows={total}, partitions={np}, avg/partition={avg}, user_rgs={ur}, effective_rgs={capped}",
             total = total, np = keys.len(), avg = avg, ur = args.row_group_size, capped = capped
