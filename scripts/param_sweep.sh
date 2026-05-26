@@ -36,7 +36,7 @@ for rgs in "${RGS_VALUES[@]}"; do
     echo "--- rgs_${rgs}-dps_${dps} ---"
     "$GEN" \
       --source "$SOURCE" \
-      --only hilbert_bloom \
+      --only hilbert-bloom \
       --hilbert-bloom-output "$COMDIR" \
       --row-group-size "$rgs" \
       --data-page-size "$dps" \
@@ -46,7 +46,7 @@ for rgs in "${RGS_VALUES[@]}"; do
       --partitioned-hilbert-bloom "$COMDIR" \
       --report "$COMDIR/report.md" \
       --json-results "$COMDIR/results.json" \
-      --only-format hilbert_bloom \
+      --only-format hilbert-bloom \
       --warmup-runs 1 --timed-runs 2
   done
 done
@@ -67,7 +67,7 @@ for fpp in "${FPP_VALUES[@]}"; do
     echo "--- fpp_${fpp}-ndv_${ndv} ---"
     "$GEN" \
       --source "$SOURCE" \
-      --only hilbert_bloom \
+      --only hilbert-bloom \
       --hilbert-bloom-output "$COMDIR" \
       --bloom-fpp "$fpp" \
       --bloom-ndv "$ndv" \
@@ -77,7 +77,7 @@ for fpp in "${FPP_VALUES[@]}"; do
       --partitioned-hilbert-bloom "$COMDIR" \
       --report "$COMDIR/report.md" \
       --json-results "$COMDIR/results.json" \
-      --only-format hilbert_bloom \
+      --only-format hilbert-bloom \
       --warmup-runs 1 --timed-runs 2
   done
 done
