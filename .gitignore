@@ -9,4 +9,5 @@ parquet/
 partition_*_parquet/
 ships/
 graphify-out/
+sweep/
 *.pyc

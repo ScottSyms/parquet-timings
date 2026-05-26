@@ -11,7 +11,7 @@ use arrow::array::{
 };
 use arrow::compute::kernels::cast::cast;
 use arrow::datatypes::{DataType, TimeUnit};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
 use parquet::basic::Type;
@@ -55,6 +55,22 @@ struct Args {
 
     #[arg(long, default_value_t = 2)]
     timed_runs: usize,
+
+    #[arg(long, value_enum, default_value_t = FormatFilter::All)]
+    only_format: FormatFilter,
+
+    #[arg(long)]
+    json_results: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum FormatFilter {
+    All,
+    Mono,
+    Part,
+    PartBloom,
+    Hilbert,
+    HilbertBloom,
 }
 
 #[derive(Clone)]
@@ -235,6 +251,18 @@ fn main() -> Result<()> {
         },
     ];
 
+    let formats: Vec<FormatSpec> = formats
+        .into_iter()
+        .filter(|f| match args.only_format {
+            FormatFilter::All => true,
+            FormatFilter::Mono => f.name == "monolithic",
+            FormatFilter::Part => f.name == "partitioned",
+            FormatFilter::PartBloom => f.name == "partitioned_bloom",
+            FormatFilter::Hilbert => f.name == "partition_hilbert",
+            FormatFilter::HilbertBloom => f.name == "partition_hilbert_bloom",
+        })
+        .collect();
+
     for format in &formats {
         if !format.path.exists() {
             bail!(
@@ -300,6 +328,37 @@ fn main() -> Result<()> {
     verify_consistency(&formats, &queries, &all_results);
     write_report(&args.report, &formats, &queries, &all_results)?;
     println!("\nReport written to {}", args.report.display());
+
+    if let Some(json_path) = &args.json_results {
+        let json_file = File::create(json_path)
+            .with_context(|| format!("failed to create {}", json_path.display()))?;
+        let mut writer = std::io::BufWriter::new(json_file);
+        writeln!(writer, "{{")?;
+        let fmt_count = formats.len();
+        for (fi, format) in formats.iter().enumerate() {
+            let fmt_name = &format.name;
+            writeln!(writer, "  {:?}: {{", fmt_name)?;
+            if let Some(qresults) = all_results.get(fmt_name) {
+                let q_count = qresults.len();
+                for (qi, qr) in qresults.iter().enumerate() {
+                    let median = median_duration(&qr.times).as_secs_f64();
+                    writeln!(
+                        writer,
+                        "    {:?}: {{ \"median\": {}, \"count\": {}, \"n_runs\": {} }}{}",
+                        qr.name,
+                        median,
+                        qr.count,
+                        qr.times.len(),
+                        if qi + 1 < q_count { "," } else { "" }
+                    )?;
+                }
+            }
+            writeln!(writer, "  }}{}", if fi + 1 < fmt_count { "," } else { "" })?;
+        }
+        writeln!(writer, "}}")?;
+        println!("JSON results written to {}", json_path.display());
+    }
+
     Ok(())
 }
 

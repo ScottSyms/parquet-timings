@@ -88,6 +88,22 @@ struct Args {
     /// ZSTD compression level (1-22)
     #[arg(long, default_value_t = 6)]
     compression: i32,
+
+    /// Data page size limit in bytes (0 = parquet-rs default ~1MB)
+    #[arg(long, default_value_t = 0)]
+    data_page_size: usize,
+
+    /// Bloom filter false positive rate
+    #[arg(long, default_value_t = 0.01)]
+    bloom_fpp: f64,
+
+    /// Bloom filter distinct value count
+    #[arg(long, default_value_t = 1_000_000)]
+    bloom_ndv: u64,
+
+    /// Maximum CSV rows to process (default: all)
+    #[arg(long)]
+    max_rows: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -297,6 +313,9 @@ async fn main() -> Result<()> {
                     &bloom_columns,
                     args.row_group_size,
                     args.compression,
+                    args.data_page_size,
+                    args.bloom_fpp,
+                    args.bloom_ndv,
                 )],
             )
             .await?;
@@ -312,6 +331,9 @@ async fn main() -> Result<()> {
                     &bloom_columns,
                     args.row_group_size,
                     args.compression,
+                    args.data_page_size,
+                    args.bloom_fpp,
+                    args.bloom_ndv,
                 )],
             )
             .await?;
@@ -327,6 +349,9 @@ async fn main() -> Result<()> {
                     &bloom_columns,
                     args.row_group_size,
                     args.compression,
+                    args.data_page_size,
+                    args.bloom_fpp,
+                    args.bloom_ndv,
                 )],
             )
             .await?;
@@ -342,6 +367,9 @@ async fn main() -> Result<()> {
                     &bloom_columns,
                     args.row_group_size,
                     args.compression,
+                    args.data_page_size,
+                    args.bloom_fpp,
+                    args.bloom_ndv,
                 )],
             )
             .await?;
@@ -595,7 +623,7 @@ async fn build_source_from_csv(ctx: &SessionContext, args: &Args) -> Result<()> 
     csv_files.sort();
 
     let total_files = csv_files.len();
-    let source_props = writer_properties_for_source(args.row_group_size, args.compression);
+    let source_props = writer_properties_for_source(args.row_group_size, args.compression, args.data_page_size);
     let csv_schema = csv_raw_schema();
 
     let mut writer: Option<ArrowWriter<File>> = None;
@@ -624,6 +652,11 @@ async fn build_source_from_csv(ctx: &SessionContext, args: &Args) -> Result<()> 
         let mut rows_in_buf = 0usize;
 
         for line_result in reader.lines() {
+            if let Some(max) = args.max_rows {
+                if total_rows >= max {
+                    break;
+                }
+            }
             let line: String = match line_result {
                 Ok(l) => l,
                 Err(e) => {
@@ -690,8 +723,8 @@ async fn build_source_from_csv(ctx: &SessionContext, args: &Args) -> Result<()> 
             }
         }
 
-        // flush remaining rows
-        if rows_in_buf > 0 {
+        // flush remaining rows (skip if max_rows already reached)
+        if rows_in_buf > 0 && args.max_rows.map_or(true, |max| total_rows < max) {
             let cursor = io::Cursor::new(&csv_buf);
             let inner_reader = ReaderBuilder::new(csv_schema.clone())
                 .with_header(false)
@@ -767,10 +800,10 @@ struct OutputSpec {
 }
 
 impl OutputSpec {
-    fn new(root: &Path, bloom: bool, bloom_columns: &[String], row_group_size: usize, compression_level: i32) -> Self {
+    fn new(root: &Path, bloom: bool, bloom_columns: &[String], row_group_size: usize, compression_level: i32, data_page_size: usize, bloom_fpp: f64, bloom_ndv: u64) -> Self {
         Self {
             root: root.to_path_buf(),
-            props: Arc::new(writer_properties(bloom, bloom_columns, row_group_size, compression_level)),
+            props: Arc::new(writer_properties(bloom, bloom_columns, row_group_size, compression_level, data_page_size, bloom_fpp, bloom_ndv)),
         }
     }
 }
@@ -786,6 +819,9 @@ struct AllOutputSpecs {
 impl AllOutputSpecs {
     fn new(args: &Args, bloom_columns: &[String]) -> Self {
         let c = args.compression;
+        let dps = args.data_page_size;
+        let fpp = args.bloom_fpp;
+        let ndv = args.bloom_ndv;
         Self {
             partition: OutputSpec::new(
                 &args.partition_output,
@@ -793,14 +829,29 @@ impl AllOutputSpecs {
                 bloom_columns,
                 args.row_group_size,
                 c,
+                dps,
+                fpp,
+                ndv,
             ),
-            bloom: OutputSpec::new(&args.bloom_output, true, bloom_columns, args.row_group_size, c),
+            bloom: OutputSpec::new(
+                &args.bloom_output,
+                true,
+                bloom_columns,
+                args.row_group_size,
+                c,
+                dps,
+                fpp,
+                ndv,
+            ),
             hilbert: OutputSpec::new(
                 &args.hilbert_output,
                 false,
                 bloom_columns,
                 args.row_group_size,
                 c,
+                dps,
+                fpp,
+                ndv,
             ),
             hilbert_bloom: OutputSpec::new(
                 &args.hilbert_bloom_output,
@@ -808,6 +859,9 @@ impl AllOutputSpecs {
                 bloom_columns,
                 args.row_group_size,
                 c,
+                dps,
+                fpp,
+                ndv,
             ),
         }
     }
@@ -1088,7 +1142,7 @@ async fn process_partition_all(
         PartitionWriter::new(outputs.bloom.root, outputs.bloom.props),
     ];
 
-    let staging_props = Arc::new(writer_properties(false, &[], args.row_group_size, args.compression));
+    let staging_props = Arc::new(writer_properties(false, &[], args.row_group_size, args.compression, args.data_page_size, args.bloom_fpp, args.bloom_ndv));
     let max_rows_per_staging_file = args.row_group_size * 10;
 
     let mut progress = Progress::new(format!("all-outputs {}", key.label()));
@@ -1452,6 +1506,9 @@ fn writer_properties(
     bloom_columns: &[String],
     row_group_size: usize,
     compression_level: i32,
+    data_page_size: usize,
+    bloom_fpp: f64,
+    bloom_ndv: u64,
 ) -> WriterProperties {
     let zstd_level = ZstdLevel::try_new(compression_level).unwrap_or_default();
     let mut builder = WriterProperties::builder()
@@ -1463,30 +1520,43 @@ fn writer_properties(
             value: Some("ais-parquet-optimizer".to_string()),
         }]));
 
+    if data_page_size > 0 {
+        builder = builder.set_data_page_size_limit(data_page_size);
+    }
+
     if bloom {
         builder = builder.set_bloom_filter_position(BloomFilterPosition::End);
         for column in bloom_columns {
             builder = builder
                 .set_column_bloom_filter_enabled(ColumnPath::from(column.as_str()), true)
-                .set_column_bloom_filter_fpp(ColumnPath::from(column.as_str()), 0.01)
-                .set_column_bloom_filter_ndv(ColumnPath::from(column.as_str()), 1_000_000);
+                .set_column_bloom_filter_fpp(ColumnPath::from(column.as_str()), bloom_fpp)
+                .set_column_bloom_filter_ndv(ColumnPath::from(column.as_str()), bloom_ndv);
         }
     }
 
     builder.build()
 }
 
-fn writer_properties_for_source(row_group_size: usize, compression_level: i32) -> WriterProperties {
+fn writer_properties_for_source(
+    row_group_size: usize,
+    compression_level: i32,
+    data_page_size: usize,
+) -> WriterProperties {
     let zstd_level = ZstdLevel::try_new(compression_level).unwrap_or_default();
-    WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_compression(Compression::ZSTD(zstd_level))
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_max_row_group_size(row_group_size)
         .set_key_value_metadata(Some(vec![KeyValue {
             key: "created_by".to_string(),
             value: Some("ais-parquet-optimizer".to_string()),
-        }]))
-        .build()
+        }]));
+
+    if data_page_size > 0 {
+        builder = builder.set_data_page_size_limit(data_page_size);
+    }
+
+    builder.build()
 }
 
 fn write_partitioned_batch(
