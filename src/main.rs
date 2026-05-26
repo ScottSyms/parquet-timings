@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -33,6 +33,16 @@ const HILBERT_COLUMN: &str = "hilbert_index";
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 const DEFAULT_BLOOM_COLUMNS: [&str; 2] = ["MMSI", "IMO"];
+
+fn parse_bloom_ndv_per_column(s: &str) -> Result<(String, u64)> {
+    let parts: Vec<&str> = s.split('=').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("invalid --bloom-ndv-per-column format: {s:?}. Expected COLUMN=NDV (e.g. MMSI=50000)")
+    }
+    let ndv: u64 = parts[1].parse()
+        .map_err(|_| anyhow::anyhow!("invalid NDV value in --bloom-ndv-per-column: {s:?}"))?;
+    Ok((parts[0].to_string(), ndv))
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(about = "Create optimized Parquet layouts for AIS data")]
@@ -97,9 +107,17 @@ struct Args {
     #[arg(long, default_value_t = 0.01)]
     bloom_fpp: f64,
 
-    /// Bloom filter distinct value count
+    /// Bloom filter distinct value count (default for all columns)
     #[arg(long, default_value_t = 1_000_000)]
     bloom_ndv: u64,
+
+    /// Per-column bloom filter NDV overrides (format: COLUMN=NDV)
+    #[arg(long = "bloom-ndv-per-column", value_parser = parse_bloom_ndv_per_column)]
+    bloom_ndv_per_column: Vec<(String, u64)>,
+
+    /// Cap row group size to average rows per partition
+    #[arg(long, default_value_t = false)]
+    smart_row_group_size: bool,
 
     /// Maximum CSV rows to process (default: all)
     #[arg(long)]
@@ -247,6 +265,30 @@ async fn main() -> Result<()> {
     register_source(&ctx, &args.source).await?;
     status("registered source parquet with DataFusion")?;
 
+    let bloom_ndv_per_col: HashMap<String, u64> = args.bloom_ndv_per_column.iter().cloned().collect();
+
+    let effective_rgs = if args.smart_row_group_size {
+        let total: i64 = ctx
+            .sql("SELECT COUNT(*) AS cnt FROM ais")
+            .await?
+            .collect()
+            .await?
+            .first()
+            .and_then(|b| b.column(0).as_any().downcast_ref::<arrow::array::Int64Array>())
+            .map(|a| a.value(0))
+            .ok_or_else(|| anyhow!("failed to get total row count"))?;
+        let keys = read_partition_keys(&ctx).await?;
+        let avg = (total as usize) / keys.len().max(1);
+        let capped = args.row_group_size.min(avg);
+        status(format!(
+            "smart-rgs: total_rows={total}, partitions={np}, avg/partition={avg}, user_rgs={ur}, effective_rgs={capped}",
+            total = total, np = keys.len(), avg = avg, ur = args.row_group_size, capped = capped
+        ))?;
+        capped
+    } else {
+        args.row_group_size
+    };
+
     match args.only {
         Only::All => {
             prepare_output_dir(&args.partition_output, args.overwrite)?;
@@ -269,7 +311,7 @@ async fn main() -> Result<()> {
                 bounds.min_lat, bounds.max_lat, bounds.min_lon, bounds.max_lon
             ))?;
 
-            let outputs = AllOutputSpecs::new(&args, &bloom_columns);
+            let outputs = AllOutputSpecs::new(&args, &bloom_columns, effective_rgs, &bloom_ndv_per_col);
             let jobs = args.jobs.unwrap_or_else(num_cpus::get).max(1);
 
             if jobs <= 1 {
@@ -311,11 +353,12 @@ async fn main() -> Result<()> {
                     &args.partition_output,
                     false,
                     &bloom_columns,
-                    args.row_group_size,
+                    effective_rgs,
                     args.compression,
                     args.data_page_size,
                     args.bloom_fpp,
                     args.bloom_ndv,
+                    &bloom_ndv_per_col,
                 )],
             )
             .await?;
@@ -329,11 +372,12 @@ async fn main() -> Result<()> {
                     &args.bloom_output,
                     true,
                     &bloom_columns,
-                    args.row_group_size,
+                    effective_rgs,
                     args.compression,
                     args.data_page_size,
                     args.bloom_fpp,
                     args.bloom_ndv,
+                    &bloom_ndv_per_col,
                 )],
             )
             .await?;
@@ -347,11 +391,12 @@ async fn main() -> Result<()> {
                     &args.hilbert_output,
                     false,
                     &bloom_columns,
-                    args.row_group_size,
+                    effective_rgs,
                     args.compression,
                     args.data_page_size,
                     args.bloom_fpp,
                     args.bloom_ndv,
+                    &bloom_ndv_per_col,
                 )],
             )
             .await?;
@@ -365,11 +410,12 @@ async fn main() -> Result<()> {
                     &args.hilbert_bloom_output,
                     true,
                     &bloom_columns,
-                    args.row_group_size,
+                    effective_rgs,
                     args.compression,
                     args.data_page_size,
                     args.bloom_fpp,
                     args.bloom_ndv,
+                    &bloom_ndv_per_col,
                 )],
             )
             .await?;
@@ -800,10 +846,10 @@ struct OutputSpec {
 }
 
 impl OutputSpec {
-    fn new(root: &Path, bloom: bool, bloom_columns: &[String], row_group_size: usize, compression_level: i32, data_page_size: usize, bloom_fpp: f64, bloom_ndv: u64) -> Self {
+    fn new(root: &Path, bloom: bool, bloom_columns: &[String], row_group_size: usize, compression_level: i32, data_page_size: usize, bloom_fpp: f64, bloom_ndv: u64, bloom_ndv_per_column: &HashMap<String, u64>) -> Self {
         Self {
             root: root.to_path_buf(),
-            props: Arc::new(writer_properties(bloom, bloom_columns, row_group_size, compression_level, data_page_size, bloom_fpp, bloom_ndv)),
+            props: Arc::new(writer_properties(bloom, bloom_columns, row_group_size, compression_level, data_page_size, bloom_fpp, bloom_ndv, bloom_ndv_per_column)),
         }
     }
 }
@@ -817,7 +863,7 @@ struct AllOutputSpecs {
 }
 
 impl AllOutputSpecs {
-    fn new(args: &Args, bloom_columns: &[String]) -> Self {
+    fn new(args: &Args, bloom_columns: &[String], effective_rgs: usize, bloom_ndv_per_column: &HashMap<String, u64>) -> Self {
         let c = args.compression;
         let dps = args.data_page_size;
         let fpp = args.bloom_fpp;
@@ -827,41 +873,45 @@ impl AllOutputSpecs {
                 &args.partition_output,
                 false,
                 bloom_columns,
-                args.row_group_size,
+                effective_rgs,
                 c,
                 dps,
                 fpp,
                 ndv,
+                bloom_ndv_per_column,
             ),
             bloom: OutputSpec::new(
                 &args.bloom_output,
                 true,
                 bloom_columns,
-                args.row_group_size,
+                effective_rgs,
                 c,
                 dps,
                 fpp,
                 ndv,
+                bloom_ndv_per_column,
             ),
             hilbert: OutputSpec::new(
                 &args.hilbert_output,
                 false,
                 bloom_columns,
-                args.row_group_size,
+                effective_rgs,
                 c,
                 dps,
                 fpp,
                 ndv,
+                bloom_ndv_per_column,
             ),
             hilbert_bloom: OutputSpec::new(
                 &args.hilbert_bloom_output,
                 true,
                 bloom_columns,
-                args.row_group_size,
+                effective_rgs,
                 c,
                 dps,
                 fpp,
                 ndv,
+                bloom_ndv_per_column,
             ),
         }
     }
@@ -1142,7 +1192,7 @@ async fn process_partition_all(
         PartitionWriter::new(outputs.bloom.root, outputs.bloom.props),
     ];
 
-    let staging_props = Arc::new(writer_properties(false, &[], args.row_group_size, args.compression, args.data_page_size, args.bloom_fpp, args.bloom_ndv));
+    let staging_props = Arc::new(writer_properties(false, &[], args.row_group_size, args.compression, args.data_page_size, args.bloom_fpp, args.bloom_ndv, &HashMap::new()));
     let max_rows_per_staging_file = args.row_group_size * 10;
 
     let mut progress = Progress::new(format!("all-outputs {}", key.label()));
@@ -1509,6 +1559,7 @@ fn writer_properties(
     data_page_size: usize,
     bloom_fpp: f64,
     bloom_ndv: u64,
+    bloom_ndv_per_column: &HashMap<String, u64>,
 ) -> WriterProperties {
     let zstd_level = ZstdLevel::try_new(compression_level).unwrap_or_default();
     let mut builder = WriterProperties::builder()
@@ -1527,10 +1578,11 @@ fn writer_properties(
     if bloom {
         builder = builder.set_bloom_filter_position(BloomFilterPosition::End);
         for column in bloom_columns {
+            let ndv = bloom_ndv_per_column.get(column.as_str()).copied().unwrap_or(bloom_ndv);
             builder = builder
                 .set_column_bloom_filter_enabled(ColumnPath::from(column.as_str()), true)
                 .set_column_bloom_filter_fpp(ColumnPath::from(column.as_str()), bloom_fpp)
-                .set_column_bloom_filter_ndv(ColumnPath::from(column.as_str()), bloom_ndv);
+                .set_column_bloom_filter_ndv(ColumnPath::from(column.as_str()), ndv);
         }
     }
 

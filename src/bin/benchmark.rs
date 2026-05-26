@@ -1583,6 +1583,30 @@ fn write_report(
         out.push('\n');
     }
 
+    out.push_str("\n## Pruning Efficiency\n\n");
+    for format in formats {
+        out.push_str(&format!("### {}\n\n", format.name));
+        out.push_str("| Query | Total RGs | Stats Skip | Hilbert Skip | Bloom Skip | Decoded |\n");
+        out.push_str("|---|---:|---:|---:|---:|---:|\n");
+        for (_query_index, result) in results[format.name].iter().enumerate() {
+            let m = &result.metrics;
+            let total = m.row_groups_total;
+            let pct = |n: usize| -> String {
+                if total == 0 { "-".to_string() } else { format!("{:.0}%", n as f64 / total as f64 * 100.0) }
+            };
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
+                result.name,
+                total,
+                pct(m.row_groups_skipped_stats),
+                pct(m.row_groups_skipped_hilbert),
+                pct(m.row_groups_skipped_bloom),
+                pct(m.row_groups_decoded),
+            ));
+        }
+        out.push('\n');
+    }
+
     out.push_str("\n## Detailed Results\n\n");
     for format in formats {
         out.push_str(&format!("### {}\n\n", format.name));
