@@ -6,7 +6,7 @@ import math
 import sys
 from pathlib import Path
 
-SWEEP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("sweep")
+SWEEP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("timings")
 
 REPORT_QUERIES = [
     "MMSI exact lookup",
