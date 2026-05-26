@@ -1,0 +1,14 @@
+[package]
+name = "ais-parquet-optimizer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+arrow = "56"
+clap = { version = "4", features = ["derive"] }
+datafusion = "50"
+futures = "0.3"
+num_cpus = "1"
+parquet = { version = "56", features = ["arrow"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

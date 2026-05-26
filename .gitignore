@@ -1,0 +1,12 @@
+target/
+.venv/
+.devenv/
+__pycache__/
+.DS_Store
+.datafusion-spill/
+csv/
+parquet/
+partition_*_parquet/
+ships/
+graphify-out/
+*.pyc
