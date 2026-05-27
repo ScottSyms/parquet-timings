@@ -203,6 +203,34 @@ def main():
         lines.append("No bloom results found.\n")
 
     # =========================================================
+    # Experiment 3: Combined Validation (all optimal params + smart-rgs)
+    # =========================================================
+    baseline_path = SWEEP / "combined" / "baseline" / "results.json"
+    optimal_path = SWEEP / "combined" / "optimal" / "results.json"
+    if baseline_path.exists() and optimal_path.exists():
+        lines.append("\n## Experiment 3: Combined Validation (smart-rgs + per-column NDV)\n")
+        baseline_data = json.loads(baseline_path.read_text())
+        optimal_data = json.loads(optimal_path.read_text())
+        fmt_key = list(baseline_data.keys())[0]
+        bl = {q: v["median"] for q, v in baseline_data[fmt_key].items() if v["median"] > 0}
+        ol = {q: v["median"] for q, v in optimal_data[fmt_key].items() if v["median"] > 0}
+
+        lines.append("| Query | Baseline (s) | Optimal (s) | Speedup |")
+        lines.append("|---|---|---|---|")
+        opt_speedups = []
+        for q in REPORT_QUERIES:
+            bv = bl.get(q)
+            ov = ol.get(q)
+            if bv and ov:
+                ratio = bv / ov if ov > 0 else 0
+                lines.append(f"| {q} | {bv:.4f} | {ov:.4f} | {ratio:.2f}x |")
+                opt_speedups.append(ratio)
+        if opt_speedups:
+            lines.append(f"\n**Combined geo-mean speedup: {geo_mean(opt_speedups):.2f}x**\n")
+    else:
+        lines.append("\n## Experiment 3: Combined Validation\n\nNo combined results yet (run `bash scripts/param_sweep.sh`).\n")
+
+    # =========================================================
     # Summary
     # =========================================================
     lines.append("\n## Optimal Parameters per Format\n")

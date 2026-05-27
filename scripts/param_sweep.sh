@@ -98,12 +98,13 @@ else
   BASELINE_DIR="$TIMINGS/combined/baseline"
   OPTIMAL_DIR="$TIMINGS/combined/optimal"
   mkdir -p "$BASELINE_DIR" "$OPTIMAL_DIR"
-  echo "  generating baseline (default params)..."
+  echo "  generating baseline (default params + smart-rgs)..."
   "$GEN" \
     --source "$SOURCE" \
     --only hilbert-bloom \
     --hilbert-bloom-output "$BASELINE_DIR" \
     --max-rows "$MAX_ROWS" \
+    --smart-rgs \
     --overwrite
   echo "  benchmarking baseline..."
   "$BENCH" \
@@ -113,7 +114,7 @@ else
     --json-results "$BASELINE_DIR/results.json" \
     --only-format hilbert-bloom \
     --warmup-runs 1 --timed-runs 2
-  echo "  generating optimal (tuned params + per-column NDV)..."
+  echo "  generating optimal (tuned params + per-column NDV + smart-rgs)..."
   "$GEN" \
     --source "$SOURCE" \
     --only hilbert-bloom \
@@ -128,6 +129,7 @@ else
     --bloom-ndv-per-column VesselName=2000 \
     --bloom-ndv-per-column VesselType=100 \
     --max-rows "$MAX_ROWS" \
+    --smart-rgs \
     --overwrite
   echo "  benchmarking optimal..."
   "$BENCH" \
