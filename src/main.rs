@@ -116,7 +116,7 @@ struct Args {
     bloom_ndv_per_column: Vec<(String, u64)>,
 
     /// Cap row group size to average rows per partition
-    #[arg(long, default_value_t = false)]
+    #[arg(long = "smart-rgs", default_value_t = false)]
     smart_row_group_size: bool,
 
     /// Maximum CSV rows to process (default: all)
