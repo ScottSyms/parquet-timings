@@ -128,6 +128,11 @@ else
     --bloom-ndv-per-column CallSign=2000 \
     --bloom-ndv-per-column VesselName=2000 \
     --bloom-ndv-per-column VesselType=100 \
+    --bloom-column MMSI \
+    --bloom-column IMO \
+    --bloom-column CallSign \
+    --bloom-column VesselName \
+    --bloom-column VesselType \
     --max-rows "$MAX_ROWS" \
     --smart-rgs \
     --overwrite

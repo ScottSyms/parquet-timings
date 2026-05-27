@@ -22,8 +22,8 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::file::statistics::Statistics;
 
-const HILBERT_BITS: u32 = 32;
-const HILBERT_MAX_AXIS: u32 = u32::MAX;
+const HILBERT_BITS: u32 = 31;
+const HILBERT_MAX_AXIS: u32 = (1 << 31) - 1;
 const HILBERT_MAX_INTERVALS: usize = 512;
 
 #[derive(Debug, Parser)]

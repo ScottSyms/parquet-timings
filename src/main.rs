@@ -1732,7 +1732,7 @@ fn strip_partition_columns(batch: &RecordBatch, keep_hilbert_column: bool) -> Re
         .context("failed to strip partition columns")
 }
 
-const HILBERT_BITS: u32 = 32;
+const HILBERT_BITS: u32 = 31;
 
 fn append_hilbert_index(batch: &RecordBatch, bounds: HilbertBounds) -> Result<RecordBatch> {
     let lat_idx = column_index(batch.schema_ref(), "LAT")?;
